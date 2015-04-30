@@ -1,0 +1,134 @@
+#include "ModelCopy2.h"
+#include "rtwtypes.h"
+#include "ModelCopy2_types.h"
+#include "ModelCopy2.c"
+#include "ModelCopy2_data.c"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <stdint.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <sys/mman.h>
+#include <signal.h>
+ 
+
+ 
+#define MAX_LOGENTRIES 200000
+static unsigned int logindex;
+static struct timespec timestamps[MAX_LOGENTRIES];
+static void logtimestamp(void)
+{
+        clock_gettime(CLOCK_MONOTONIC, &timestamps[logindex++]);
+        if(logindex > MAX_LOGENTRIES){
+                logindex = 0;
+        }
+}
+ 
+static void dumptimestamps(int unused)
+{
+        FILE *fp = fopen("timestamps3.txt","w");
+        int i;
+        for(i=0; i < logindex; i++){
+                if(timestamps[i].tv_sec > 0){
+                        fprintf(fp,"%d.%09d\n", (int) timestamps[i].tv_sec,
+                                (int) timestamps[i].tv_nsec);
+                }
+        }
+        fclose(fp);
+        exit(0);
+}
+ 
+// Adds "delay" nanoseconds to timespecs and sleeps until that time
+static void sleep_until(struct timespec *ts, int delay)
+{
+         
+        ts->tv_nsec += delay;
+        if(ts->tv_nsec >= 1000*1000*1000){
+                ts->tv_nsec -= 1000*1000*1000;
+                ts->tv_sec++;
+        }
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ts,  NULL);
+}
+ 
+ 
+float rt_OneStep(void)
+{
+  static boolean_T OverrunFlag = 0;
+
+  /* '<Root>/VIND' */
+  static real_T arg_VIND;
+
+  /* '<Root>/PUT' */
+  static real_T arg_PUT;
+
+  /* Disable interrupts here */
+  //nointerrupts();
+  /* Check for overrun */
+  if (OverrunFlag) {
+    rtmSetErrorStatus(ModelCopy2_M, "Overrun");
+    return arg_PUT;
+  }
+ 
+  OverrunFlag = true;
+ 
+  /* Save FPU context here (if necessary) */
+  /* Re-enable timer or interrupt here */
+  /* Set model inputs here */
+  arg_VIND = 16;
+  /* Step the model */
+  arg_PUT = ModelCopy2_custom(arg_VIND);
+ 
+  /* Get model outputs here */
+ 
+  /* Indicate task complete */
+  OverrunFlag = false;
+ 
+  /* Disable interrupts here */
+  /* Restore FPU context here (if necessary) */
+  /* Enable interrupts here */
+  //interrupts();
+}
+ 
+int_T main(int_T argc, const char_T *argv)
+{
+ 
+    struct timespec ts;
+    unsigned int delay = 1000*1000; // Note: Delay in ns
+ 
+    /* Initialize model */
+    ModelCopy2_initialize();
+ 
+ 
+    signal(SIGINT, dumptimestamps);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+ 
+    // Lock memory to ensure no swapping is done.
+    if(mlockall(MCL_FUTURE|MCL_CURRENT)){
+    fprintf(stderr,"WARNING: Failed to lock memory\n");
+    }
+     
+    // Set our thread to real time priority
+    struct sched_param sp;
+    sp.sched_priority = 30;
+    if(pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp)){
+                fprintf(stderr,"WARNING: Failed to set stepper thread"
+                        "to real-time priority\n");
+    }
+ 
+    while(1){
+ 
+        sleep_until(&ts,delay); logtimestamp(); rt_OneStep();
+ 
+        double stuff = ModelCopy2_Y.PUT;
+//	double QUT = ModelCopy2_B.QUT;
+        //char tbs[16]
+ 
+        printf("\nP = %f ",stuff);
+//	printf("       Q = %f",QUT);
+ 
+    }
+ 
+}
